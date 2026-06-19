@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import json
 import smtplib
 from email.message import EmailMessage
+import base64
 #Loading the .env
 from dotenv import load_dotenv
 
@@ -20,6 +21,14 @@ SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 465))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+
+#Update: Create a function that can process the image for the LLM.
+def encode_image(image_path):
+    #Here we ensure that we can open the file, use it and close it.
+    #Using "rb" for read binary, raw bits.
+    with open(image_path, "rb") as image_file:
+        #We need to convert these raw bytes into text B64 (ASCII) and decode for normal text, for the LLM, then, the text can be sent to the API through JSON.
+        return base64.b64encode(image_file.read()).decode('utf-8')
 
 #Important note: each step in the flow will be a function.
 def search_web(query:str) -> str:    
@@ -108,7 +117,8 @@ def send_email(recipient:str, subject:str, body:str) -> str:
     except Exception as e:
         return f"Error occurred while sending email: {e}"
 
-def call_gemma_ollama(prompt:str, output_format:str="json") -> str:
+#Update: Now, the image path is added in the parameters, starting by None in case that an image is not received.
+def call_gemma_ollama(prompt:str, output_format:str="json", image_path: str=None) -> str:
     # This function will call the Gemma Ollama API with the given prompt and return the response as a string JSON
     # You can implement the logic to call the API and process the response
     print(f"--Thinking with local Gemma ({OLLAMA_MODEL})--")
@@ -119,6 +129,10 @@ def call_gemma_ollama(prompt:str, output_format:str="json") -> str:
         #This parameter is set to False to get the full response at once instead of streaming it. This can be useful for better processing and handling of the response, especially if the response is expected to be large or if you want to avoid dealing with streaming data.
         "stream": False,
     }
+
+    #Verifying if an image is received:
+    if image_path:
+        payload["images"]=[encode_image(image_path)]
     if output_format == "json":
         payload["format"] = "json"
     try:
@@ -343,11 +357,24 @@ def main():
 
     #The permanent loop that is running the agent:
     while True:
-        user_goal = input("\n What would you like to find?  \n")
+        #Update: Now the workflow can admit images.
+        user_input = input("\n What would you like to find? (or drop your image here)  \n")
         #Searching in the user goal any signal for finishing the program (Quit or Exit)
-        if user_goal.lower() in ["quit", "exit"]:
+        if user_input.lower() in ["quit", "exit"]:
             print("Goodbye!")
             break
+        #Evaluating if the user goal includes images:
+        if os.path.isfile(user_input):
+            print(f"---Analyzing image at '{user_input}' ---")
+            #Extracting the image description through LLM.
+            image_description=call_gemma_ollama("Describe this image", output_format="text", image_path=user_input)
+            #Adding the image to the user goal: The user goal is restricted here.
+            user_goal=f"Tell me places where I can find {image_description}"
+        #Otherwise, will catch the text.
+        else:
+            user_goal = user_input
+
+        print("User Goal: {user_goal}")
         agent_summary=run_concierge_agent(user_goal, conversation_history)
         conversation_history.append(f"User: {user_goal}")
         conversation_history.append(f"Agent: {agent_summary}")
