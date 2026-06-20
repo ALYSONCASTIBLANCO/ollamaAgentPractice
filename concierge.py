@@ -118,13 +118,13 @@ def send_email(recipient:str, subject:str, body:str) -> str:
         return f"Error occurred while sending email: {e}"
 
 #Update: Now, the image path is added in the parameters, starting by None in case that an image is not received.
-def call_gemma_ollama(prompt:str, output_format:str="json", image_path: str=None) -> str:
+def call_gemma_ollama(prompt:str, model=OLLAMA_MODEL, output_format:str="json", image_path: str=None) -> str:
     # This function will call the Gemma Ollama API with the given prompt and return the response as a string JSON
     # You can implement the logic to call the API and process the response
-    print(f"--Thinking with local Gemma ({OLLAMA_MODEL})--")
+    print(f"--Thinking with local model({model})--")
     url = f"{OLLAMA_HOST}/api/generate"
     payload = {
-        "model": OLLAMA_MODEL,
+        "model": model,
         "prompt": prompt,
         #This parameter is set to False to get the full response at once instead of streaming it. This can be useful for better processing and handling of the response, especially if the response is expected to be large or if you want to avoid dealing with streaming data.
         "stream": False,
@@ -367,7 +367,49 @@ def main():
         if os.path.isfile(user_input):
             print(f"---Analyzing image at '{user_input}' ---")
             #Extracting the image description through LLM.
-            image_description=call_gemma_ollama("Describe this image", output_format="text", image_path=user_input)
+            llava_prompt='''
+                You are a computer vision system for an AI agent.
+
+Your job is ONLY to describe and identify what is in the image as accurately as possible.
+
+STEP 1 - VISUAL DESCRIPTION
+Describe what you see in detail:
+- objects
+- food type (if any)
+- texture
+- color
+- presentation
+- packaging or plating
+
+STEP 2 - FOOD IDENTIFICATION (if applicable)
+If the image contains food:
+- Identify the most likely dish or dessert
+- If unsure, give the closest match
+- Mention if it looks homemade, restaurant-made, or packaged
+
+STEP 3 - CUISINE GUESS (STRICT)
+Only infer cuisine if there are strong visual indicators such as:
+- specific ingredients (e.g. sushi, tacos, curry)
+- plating style strongly associated with a region
+- packaging or text in the image
+
+If not clearly identifiable, ALWAYS output:
+Cuisine: Unknown
+Do NOT guess based on probability.
+
+RULES:
+- Do NOT invent context not visible in the image
+- If uncertain, say "unknown"
+- Be precise, not creative
+- Avoid long explanations
+
+OUTPUT FORMAT (STRICT):
+
+Food: ...
+Possible dish: ...
+Cuisine: ...
+            '''
+            image_description=call_gemma_ollama(prompt=llava_prompt, model="llava", output_format="text", image_path=user_input)
             #Adding the image to the user goal: The user goal is restricted here.
             user_goal=f"Tell me places where I can find {image_description}"
         #Otherwise, will catch the text.
