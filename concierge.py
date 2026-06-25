@@ -146,11 +146,8 @@ def call_gemma_ollama(prompt:str, model=OLLAMA_MODEL, output_format:str="json", 
     except (KeyError, IndexError) as e:
         return f"Error: Failed to parse Ollama API response: {e}"
 
-def run_concierge_agent(goal:str, history:list) -> str:
-    # This function will run the concierge agent with the given goal and history
-    # You can implement the logic to process the goal and history, and generate a response
-    # and will return the response as a string
-
+#Update: The concierge function was reduced creating functions for each step, then, we have more control about what to send.
+def find_email(goal:str):
     #The objective of this prompt is to extract an email address from the user request. The prompt is designed to instruct the LLM to analyze the user request and look for any email addresses. 
     #If an email address is found, it will respond with only the email address. If no email address is found, it will respond with a message indicating that no email address was found. 
     #This prompt can be used as part of the concierge agent's processing to identify and extract email addresses from user requests.
@@ -166,14 +163,13 @@ def run_concierge_agent(goal:str, history:list) -> str:
     if "@" not in recipient_email_from_goal:
         recipient_email_from_goal = None
     print(f"\n Goal: {goal}\n")
+    return recipient_email_from_goal
 
-    formated_history = "\n".join(history)
-    #Applying the steps:
-    #1. Decide what to search for:
+def search_pages(goal:str, history:list) -> str:
     prompt1=f""" You are a helpful concierge agent. Your task is to understand a user's request and generate a concise, effective search query to find the infomation they need. 
     Conversation history:
     ---
-    {formated_history}
+    {history}
     ---
     The user's latest request is: "{goal}". 
     
@@ -184,8 +180,10 @@ def run_concierge_agent(goal:str, history:list) -> str:
     search_query = call_gemma_ollama(prompt1, output_format="text").strip().replace('"','')
     search_results = search_web(search_query)
     print(search_results)
+    return search_results
 
-    #2. Choose which sites to visit and extract the content:
+#Pending element: Verify if the final summary is well developed when can't visit the URLs.
+def browse_pages(goal:str, search_results:str) -> str:
     prompt2=f""" You a smart web navigator. Your task is to analyze Google search results and select the most promising URLs to find the answer to a user's goal. Avoid generic homepages (like yelp.com or google.com) and prefer specific articles, lists, or maps.
 
     User's goal: "{goal}"
@@ -210,7 +208,7 @@ def run_concierge_agent(goal:str, history:list) -> str:
         print("\n--- Here is your summary --- \n")
         print(final_summary)
         print("\n--- End of summary --- \n")
-        return final_summary
+        return final_summary, ""
 
     #If the LLM returns URLs, it will browse each URL and extract the content. Then, it will summarize the content of all the URLs to provide a final answer to the user's goal.
     all_website_texts = []
@@ -232,11 +230,9 @@ def run_concierge_agent(goal:str, history:list) -> str:
         print("\n--- Here is your summary --- \n")
         print(final_summary)
         print("\n--- End of summary --- \n")
-        return final_summary 
+        return final_summary, ""
     
     aggregated_content = "\n\n---\n\n".join(all_website_texts)
-
-    #3. Summarize the content and provide an answer to the user's goal:
     prompt3=f""" You are a meticulous and trustworthy concierge agent. Your primary goal is to provide a clear, concise, and, above all, ACCURATE answer to the user's requuest by synthesizing information from multiple sources.
     User's goal: "{goal}"
 
@@ -256,8 +252,10 @@ def run_concierge_agent(goal:str, history:list) -> str:
     print("\n--- Here is your summary --- \n")
     print(final_summary)
     print("\n--- End of summary --- \n")
-    
-    # 4. Decide if an email should be sent and generate its content
+    return final_summary, aggregated_content
+
+#Pending element to check: A JSON error is present when the JSON is still created.
+def send_email_user(goal:str, final_summary:str, aggregated_content:str, recipient_email_from_goal:str) -> str:
     prompt4 = f"""
     You are a highly capable assistant responsible for drafting clear and detailed emails based on a research summary.
 
@@ -298,7 +296,6 @@ def run_concierge_agent(goal:str, history:list) -> str:
     #Calling the LLM to decide if an email should be sent and to generate the email content if needed. The response will be in JSON format, which will indicate whether to send the email and, if so, what the subject and body of the email should be.
     email_decision_str = call_gemma_ollama(prompt4, output_format="json")
     print(email_decision_str)
-    print("--FIN DEL COMUNICADO--")
     #Time to verify the possible answers of this calling and take actions.
     try:
         #First, it will try to parse the response from the LLM as JSON. If the parsing is successful, it will check if the "send_email" key is true. If it is true, it will call the send_email function with the recipient email (extracted from the user's goal), subject, and body from the JSON response. If "send_email" is false, it will simply print a message indicating that no email will be sent.
@@ -335,7 +332,24 @@ def run_concierge_agent(goal:str, history:list) -> str:
     
     return final_summary
 
-#5. Final User Interface to run the flow.
+#Update: Concierge agent reduced with functions for a higher control.
+def run_concierge_agent(goal:str, history:list) -> str:
+    # This function will run the concierge agent with the given goal and history
+    # You can implement the logic to process the goal and history, and generate a response
+    # and will return the response as a string
+
+    recipient_email_from_goal=find_email(goal)
+    formated_history = "\n".join(history)
+    #Applying the steps:
+    #1. Decide what to search for:
+    search_results=search_pages(goal, formated_history)
+    #2. Choose which sites to visit and extract the content and Summarize the content and provide an answer to the user's goal:
+    final_summary, aggregated_content=browse_pages(goal, search_results)
+    # 3. Decide if an email should be sent and generate its content
+    final_result=send_email_user(goal, final_summary, aggregated_content, recipient_email_from_goal)
+    print(final_result)
+
+#4. Final User Interface to run the flow.
 def main():
     """
     The main function that runs the terminal application loop.
@@ -370,45 +384,46 @@ def main():
             llava_prompt='''
                 You are a computer vision system for an AI agent.
 
-Your job is ONLY to describe and identify what is in the image as accurately as possible.
+        Your job is ONLY to describe and identify what is in the image as accurately as possible.
 
-STEP 1 - VISUAL DESCRIPTION
-Describe what you see in detail:
-- objects
-- food type (if any)
-- texture
-- color
-- presentation
-- packaging or plating
+        STEP 1 - VISUAL DESCRIPTION
+        Describe what you see in detail:
+        - objects
+        - food type (if any)
+        - texture
+        - color
+        - presentation
+        - packaging or plating
 
-STEP 2 - FOOD IDENTIFICATION (if applicable)
-If the image contains food:
-- Identify the most likely dish or dessert
-- If unsure, give the closest match
-- Mention if it looks homemade, restaurant-made, or packaged
+        STEP 2 - FOOD IDENTIFICATION (if applicable)
+        If the image contains food:
+        - Identify the most likely dish or dessert
+        - If unsure, give the closest match
+        - Mention if it looks homemade, restaurant-made, or packaged
 
-STEP 3 - CUISINE GUESS (STRICT)
-Only infer cuisine if there are strong visual indicators such as:
-- specific ingredients (e.g. sushi, tacos, curry)
-- plating style strongly associated with a region
-- packaging or text in the image
+        STEP 3 - CUISINE GUESS (STRICT)
+        Only infer cuisine if there are strong visual indicators such as:
+        - specific ingredients (e.g. sushi, tacos, curry)
+        - plating style strongly associated with a region
+        - packaging or text in the image
 
-If not clearly identifiable, ALWAYS output:
-Cuisine: Unknown
-Do NOT guess based on probability.
+        If not clearly identifiable, ALWAYS output:
+        Cuisine: Unknown
+        Do NOT guess based on probability.
 
-RULES:
-- Do NOT invent context not visible in the image
-- If uncertain, say "unknown"
-- Be precise, not creative
-- Avoid long explanations
+        RULES:
+        - Do NOT invent context not visible in the image
+        - If uncertain, say "unknown"
+        - Be precise, not creative
+        - Avoid long explanations
 
-OUTPUT FORMAT (STRICT):
+        OUTPUT FORMAT (STRICT, DON'T IGNORE THIS):
 
-Food: ...
-Possible dish: ...
-Cuisine: ...
-            '''
+        Food: ...
+        Possible dish: ...
+        Cuisine: ...
+        Confidence: ...
+                    '''
             image_description=call_gemma_ollama(prompt=llava_prompt, model="llava", output_format="text", image_path=user_input)
             #Adding the image to the user goal: The user goal is restricted here.
             user_goal=f"Tell me places where I can find {image_description}"
@@ -416,7 +431,7 @@ Cuisine: ...
         else:
             user_goal = user_input
 
-        print("User Goal: {user_goal}")
+        print("User Goal: "+user_goal)
         agent_summary=run_concierge_agent(user_goal, conversation_history)
         conversation_history.append(f"User: {user_goal}")
         conversation_history.append(f"Agent: {agent_summary}")
